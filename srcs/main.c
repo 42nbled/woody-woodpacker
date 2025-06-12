@@ -14,9 +14,16 @@ int main(int argc, char *argv[]) {
 	if (!initial_code || file_size <= 0)
 		return 1;
 
+	Elf64_Ehdr *ehdr = (Elf64_Ehdr *)initial_code;
+	if (ehdr->e_ident[EI_CLASS] != ELFCLASS64) {
+		fprintf(stderr, "Error: Not a 64-bit ELF file.\n");
+		free(initial_code);
+		return 1;
+	}
+
 	fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0777);
 	if (fd == -1) {
-		perror("open error");
+		fprintf(stderr, "Error: open error");
 		free(initial_code);
 		return 1;
 	}
