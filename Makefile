@@ -6,15 +6,19 @@ INC_DIR = header
 
 SRCS =	main.c \
 		read_file.c \
-		write_file.c \
-		filelen.c \
-		utils.c
+		write_file.c
+
+ASM_SRCS = srcs/payload.asm
 
 SRCS := $(addprefix $(SRC_DIR)/, $(SRCS))
-OBJS := $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS))
+OBJS := $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS)) \
+        $(patsubst $(SRC_DIR)/%.asm, $(OBJ_DIR)/%.o, $(ASM_SRCS))
 
 CC = gcc
-CFLAGS = -Wall -Wextra -Werror -I$(INC_DIR) -fcf-protection=none # -g -ggdb #-32m
+CFLAGS = -I$(INC_DIR) -fcf-protection=none # -g -ggdb #-32m -Wall -Wextra -Werror
+
+NA = nasm
+NA_FLAGS = -f elf64 -g -F dwarf
 
 $(NAME): $(OBJS)
 	@echo "\033[0;34mCompiling $(NAME)...\033[0m"
@@ -26,6 +30,10 @@ all: $(NAME)
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.asm
+	@mkdir -p $(OBJ_DIR)
+	$(NA) $(NA_FLAGS) $< -o $@
 
 clean:
 	@echo "\033[0;34mCleaning objects...\033[0m"

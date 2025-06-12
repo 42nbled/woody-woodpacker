@@ -1,140 +1,81 @@
 #include "woody.h"
-#include "syscall.h"
 
-void __attribute__((naked, section("payload"))) payload_write(void)
+#define MESSAGE_SIZE 14
+
+extern unsigned char __start_payload[];		// pointeur du debut de la fonction
+extern unsigned char __stop_payload[];		// pointeur de la fin de la fonction
+extern unsigned char _encrypted_start[];	// pointeur du debut de la partie a encrypter
+extern unsigned char _encrypted_end[];		// pointeur de la fin de la partie a encrypter
+
+unsigned long	calc_jump(unsigned long from, unsigned long to, unsigned long offset)
 {
-	asm __volatile__ (
-		"push %rbp\n\t"
-		"movq %rsp, %rbp\n\t"
-		"sub $0x10, %rsp\n\t"
-		"movabs $0xa21646c726f77, %rax\n\t"
-		"movq %rax, -0x08(%rbp)\n\t"
-
-		"movabs $0x77202c6f6c6c6568, %rax\n\t"
-		"movq %rax, -0x0f(%rbp)\n\t"
-
-		"lea -0x10(%rbp), %rsi\n\t"
-
-		"movq $1, %rax\n\t"
-		"movq $1, %rdi\n\t"
-		"movq $15, %rdx\n\t"
-		"syscall\n\t"
-		"add $0x10, %rsp\n\t"
-		"pop %rbp\n\t"
-		"ret\n\t"
-	);
+	return to - from - offset;
 }
 
-long _syscall(long syscall_number, ...) {
-	__builtin_va_list args;
-	long result;
+void	XOR(unsigned char *payload, size_t payload_len, char key) {
+	for (size_t i = 0; i < payload_len; i++)
+		payload[i] ^= key;
+}
 
-	long arg1, arg2, arg3, arg4, arg5, arg6;
+void	write_file(char *elf, long elf_size, int fd, unsigned long int text_end, unsigned long rel_jump) {
+	size_t payload_len = __stop_payload - __start_payload;
+	size_t jump_offest = _encrypted_start - __start_payload;
+	size_t _encrypted_size = _encrypted_end - _encrypted_start;
+	unsigned char payload[payload_len];
 
-	__builtin_va_start(args, syscall_number);
-	arg1 = __builtin_va_arg(args, long);
-	arg2 = __builtin_va_arg(args, long);
-	arg3 = __builtin_va_arg(args, long);
-	arg4 = __builtin_va_arg(args, long);
-	arg5 = __builtin_va_arg(args, long);
-	arg6 = __builtin_va_arg(args, long);
-	__builtin_va_end(args);
+	memcpy(payload, __start_payload, payload_len);
+	XOR(payload + (size_t)(_encrypted_start - __start_payload), _encrypted_size, 0x42);
 
-	__asm__ volatile (
-			"movq %1, %%rax	\n\t"
-			"movq %2, %%rdi	\n\t"
-			"movq %3, %%rsi	\n\t"
-			"movq %4, %%rdx	\n\t"
-			"movq %5, %%r10	\n\t"
-			"movq %6, %%r8	\n\t"
-			"movq %7, %%r9	\n\t"
-			"syscall		\n\t"
-			"movq %%rax, %0	\n\t"
-			: "=r" (result)
-			: "r" (syscall_number), "r" (arg1), "r" (arg2), "r" (arg3),
-			"r" (arg4), "r" (arg5), "r" (arg6)
-			: "rax", "rdi", "rsi", "rdx", "r10", "r8", "r9", "memory"
-		);
+	memcpy(&payload[jump_offest - 4], &rel_jump, 4);
 
-	if (result < 0) {
-		return -1;
+	write(fd, elf, text_end);
+	write(fd, payload, payload_len);
+
+	char b[4096] = {0};
+	write(fd, b, PAGE_SIZE - payload_len);
+
+	write(fd, elf + text_end, elf_size - text_end);
+	close(fd);
+	free(elf);
+}
+
+void	silvio_infect(int fd, char *elf, long elf_size) {
+
+	size_t payload_len = __stop_payload - __start_payload;
+	size_t jump_offest = _encrypted_start - __start_payload;
+
+	Elf64_Ehdr *ehdr = (Elf64_Ehdr *)elf;
+	Elf64_Phdr *phdr = (Elf64_Phdr *)(elf + ehdr->e_phoff);
+	Elf64_Shdr *shdr = (Elf64_Shdr *)(elf + ehdr->e_shoff);
+
+	unsigned long int text_end, payload_vaddr;
+	unsigned long int entry = ehdr->e_entry;
+
+	ehdr->e_shoff += PAGE_SIZE;
+
+	for (size_t i = 0; i < ehdr->e_phnum; ++i) {
+		if (phdr[i].p_type == PT_LOAD && phdr[i].p_flags == (PF_R | PF_X)) {
+			text_end = phdr[i].p_offset + phdr[i].p_filesz;
+			payload_vaddr = phdr[i].p_vaddr + phdr[i].p_memsz;
+
+			ehdr->e_entry = payload_vaddr;
+			phdr[i].p_filesz += payload_len;
+			phdr[i].p_memsz += payload_len;
+
+			for (size_t j=i+1; j < ehdr->e_phnum; ++j)
+				phdr[j].p_offset += PAGE_SIZE;
+
+			break ;
+		}
 	}
 
-    return result;
-}
+	for (size_t i=0; i < ehdr->e_shnum; ++i) {
+		if (shdr[i].sh_offset > text_end)
+			shdr[i].sh_offset += PAGE_SIZE;
+		else if (shdr[i].sh_addr + shdr[i].sh_size == payload_vaddr)
+			shdr[i].sh_size += payload_len;
+	}
 
-extern unsigned char __start_payload[];
-extern unsigned char __stop_payload[];
-
-static void NULL_void_ret(char *str, char *buffer, int fd) {
-	if (str)
-		perror(str);
-	if (buffer)
-		free(buffer);
-	if (fd)
-		close(fd);
-	return;
-}
-
-void write_file(char *buffer, long size) {
-    const char *filename = "woody";
-    char *ptr = buffer;
-    int fd;
-    size_t buffer_size = size;
-
-    Elf64_Ehdr *ehdr = (Elf64_Ehdr *)buffer;
-    Elf64_Phdr *phdr = (Elf64_Phdr *)(buffer + ehdr->e_phoff);
-    Elf64_Shdr *shdr = (Elf64_Shdr *)(buffer + ehdr->e_shoff);
-
-    (void)shdr;
-
-    if (memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0)
-        {NULL_void_ret("not a valid ELF file.", ptr, 0); return;}
-
-    Elf64_Phdr *target_phdr = NULL;
-    for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdr[i].p_type == PT_LOAD && (phdr[i].p_flags & PF_X)) {
-            target_phdr = &phdr[i];
-            break;
-        }
-    }
-
-    if (!target_phdr)
-        {NULL_void_ret("no available phdr found", ptr, 0); return;}
-
-    fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0644);
-    printf("%d\n", fd);
-    if (fd == -1)
-        {NULL_void_ret("open error", ptr, 0); return;}
-
-    size_t payload_len = __stop_payload - __start_payload;
-    unsigned char payload[payload_len];
-	memcpy(payload, __start_payload, payload_len);
-
-    size_t insert_offset = target_phdr->p_offset;
-
-    ehdr = (Elf64_Ehdr *)buffer;
-
-    if (ehdr->e_shoff >= insert_offset) {
-        ehdr->e_shoff += payload_len;
-    }
-
-    phdr = (Elf64_Phdr *)(buffer + ehdr->e_phoff);
-    for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdr[i].p_offset > insert_offset) {
-            phdr[i].p_offset += payload_len;
-        }
-        if (phdr[i].p_offset <= insert_offset &&
-            phdr[i].p_offset + phdr[i].p_filesz >= insert_offset) {
-            phdr[i].p_filesz += payload_len;
-            phdr[i].p_memsz += payload_len;
-        }
-    }
-
-    _syscall(SYS_write, fd, buffer, insert_offset);
-    _syscall(SYS_write, fd, payload, payload_len);
-    _syscall(SYS_write, fd, buffer + insert_offset, buffer_size - insert_offset);
-
-    close(fd);
-    free(buffer);
+	unsigned long rel_jump = calc_jump(payload_vaddr, entry, jump_offest);
+	write_file(elf, elf_size, fd, text_end, rel_jump);
 }
