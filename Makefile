@@ -15,7 +15,7 @@ OBJS := $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS)) \
         $(patsubst $(SRC_DIR)/%.asm, $(OBJ_DIR)/%.o, $(ASM_SRCS))
 
 CC = gcc
-CFLAGS = -I$(INC_DIR) -fcf-protection=none # -g -ggdb #-32m -Wall -Wextra -Werror
+CFLAGS = -Wall -Wextra -Werror -z noexecstack -I$(INC_DIR) -fcf-protection=none  # -g -ggdb
 
 NA = nasm
 NA_FLAGS = -f elf64 -g -F dwarf

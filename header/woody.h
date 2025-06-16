@@ -12,6 +12,6 @@
 # define PAGE_SIZE getpagesize()
 
 char	*read_file(const char *filename, int *size);
-void	silvio_infect(int fd, char *elf, long elf_size);
+void	silvio_infect(int fd, char *elf, long elf_size, unsigned char *key);
 
 #endif

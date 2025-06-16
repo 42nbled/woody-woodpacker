@@ -1,4 +1,5 @@
 #include "woody.h"
+#include <string.h>
 
 #define MESSAGE_SIZE 14
 
@@ -6,28 +7,71 @@ extern unsigned char __start_payload[];		// pointeur du debut de la fonction
 extern unsigned char __stop_payload[];		// pointeur de la fin de la fonction
 extern unsigned char _encrypted_start[];	// pointeur du debut de la partie a encrypter
 extern unsigned char _encrypted_end[];		// pointeur de la fin de la partie a encrypter
+extern unsigned char key_start[];
+
 
 unsigned long	calc_jump(unsigned long from, unsigned long to, unsigned long offset)
 {
 	return to - from - offset;
 }
 
-void	XOR(unsigned char *payload, size_t payload_len, char key) {
-	for (size_t i = 0; i < payload_len; i++)
-		payload[i] ^= key;
+size_t    ft_strlen(unsigned char *S)
+{
+    size_t    l = 0;
+    while (S[l]) l++;
+    return l;
 }
 
-void	write_file(char *elf, long elf_size, int fd, unsigned long int text_end, unsigned long rel_jump) {
+void    RC4(unsigned char *text, size_t len, unsigned char *key, size_t L)
+{
+    unsigned char S[256] = {0};
+    for (int i = 0; i < 256; i++)
+        S[i] = i;
+    for (int i = 0, j = 0; i < 256; i++ )
+    {
+        j = (j + S[i] + key[i % L]) % 256;
+        S[i] ^= S[j];
+        S[j] ^= S[i];
+        S[i] ^= S[j];
+    }
+
+    for (size_t i = 0, j = 0, k = 0, t = 0; k < len; k++)
+    {
+        i = (i + 1) % 256 ;
+        j = (j + S[i]) % 256 ;
+        S[i] ^= S[j];
+        S[j] ^= S[i];
+        S[i] ^= S[j];
+        t = (S[i] + S[j]) % 256 ;
+        text[k] ^= S[t];
+    }
+}
+
+unsigned char	*zero_extend(unsigned char *src, size_t len)
+{
+	unsigned char *dst;
+
+	dst = malloc(sizeof(char) * len);
+	bzero(dst, sizeof(char) * len);
+	memcpy(dst, src, strlen((char*)src));
+	return dst;
+}
+
+void	write_file(char *elf, long elf_size, int fd, unsigned long int text_end, unsigned long rel_jump, unsigned char *key) {
 	size_t payload_len = __stop_payload - __start_payload;
 	size_t jump_offest = _encrypted_start - __start_payload;
 	size_t _encrypted_size = _encrypted_end - _encrypted_start;
+	size_t key_offset = key_start - __start_payload;
+	size_t key_len = __stop_payload - key_start;
 	unsigned char payload[payload_len];
 
+
+	key = zero_extend(key, key_len);
 	memcpy(payload, __start_payload, payload_len);
-	XOR(payload + (size_t)(_encrypted_start - __start_payload), _encrypted_size, 0x42);
+	RC4(payload + (size_t)(_encrypted_start - __start_payload), _encrypted_size, key, key_len);
 
 	memcpy(&payload[jump_offest - 4], &rel_jump, 4);
-
+	memcpy(&payload[key_offset], key, key_len);
 	write(fd, elf, text_end);
 	write(fd, payload, payload_len);
 
@@ -37,9 +81,10 @@ void	write_file(char *elf, long elf_size, int fd, unsigned long int text_end, un
 	write(fd, elf + text_end, elf_size - text_end);
 	close(fd);
 	free(elf);
+	free(key);
 }
 
-void	silvio_infect(int fd, char *elf, long elf_size) {
+void	silvio_infect(int fd, char *elf, long elf_size, unsigned char* key) {
 
 	size_t payload_len = __stop_payload - __start_payload;
 	size_t jump_offest = _encrypted_start - __start_payload;
@@ -77,5 +122,5 @@ void	silvio_infect(int fd, char *elf, long elf_size) {
 	}
 
 	unsigned long rel_jump = calc_jump(payload_vaddr, entry, jump_offest);
-	write_file(elf, elf_size, fd, text_end, rel_jump);
+	write_file(elf, elf_size, fd, text_end, rel_jump, key);
 }
